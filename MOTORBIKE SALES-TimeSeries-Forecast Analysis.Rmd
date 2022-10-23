@@ -1,0 +1,213 @@
+---
+title: "MOTORBIKE SALES-Time Series & Forecast"
+author: "Tubagus Fathul Arifin"
+date: "`r Sys.Date()`"
+output:
+  html_document:
+     toc: true
+     toc_depth: 5
+     toc_float: true
+     theme: readable
+     highlight: breezedark
+     df_print: paged
+---
+
+```{r setup, include=FALSE, echo=FALSE, out.width="100%"}
+
+library(forecast)
+library(lubridate)
+library(tseries)
+library(padr)
+library(dplyr)
+library(tidyr)
+library(zoo)
+library(ggplot2)
+library(tidyverse)
+library(TSstudio)
+library(MLmetrics)
+```
+
+```{r echo=FALSE, out.width="100%"}
+knitr::include_graphics("assets/MOTORSALES.jpg")
+```
+
+# **1. DATA INTRODUCTION**  
+  
+This time we will do a time series & forecast analysis for average motorcycle sales data at a dealership from 1967-2019. 
+  
+## **1.1. Data Preparation**
+Read The data.  
+```{r}
+(motosale <- read.csv("DAUTONSA.csv"))
+```
+- `DATE`: the date when the sale was recorded  
+- `DAUTONSA`: average sales.  
+  
+## **1.2. Data Preprocessing**  
+Change the `DATE` data type into datetime data type.
+```{r}
+motosale <- motosale %>% 
+  mutate(DATE = ymd (DATE))
+glimpse(motosale)
+```
+Check the completeness of the time interval. Since this is mandatory for time series data, no time period should be missed.
+```{r}
+motosale <- motosale %>% 
+  pad()
+```
+Check missing value. This is mandatory for time series data, there should be no missing value in the data.
+```{r}
+anyNA(motosale)
+colSums(is.na(motosale))
+```
+Based on the above checks, there are no missing values in our data. So, we don't need to fill in the missing values.  
+
+# **2. CREATING TIME SERIES OBJECT**  
+  
+Firstly we need to know the start and the end of the time interval for time series. And then we can create the time series object.
+```{r}
+range(motosale$DATE)
+```
+And now We can create the time series object.
+```{r}
+motosale_ts <- ts(data = motosale$DAUTONSA, start = c(1967, 1), frequency = 12)
+glimpse(motosale_ts)
+```
+View general data visualization.
+```{r}
+motosale_ts %>% 
+  autoplot()
+```
+
+```{r}
+glimpse(motosale_ts)
+```
+
+
+
+# **3.SEASONALITY ANALYSIS**  
+
+Before doing the forecasting model, we need to observe the time series object from the `decompose` result. The main idea of decomposition is to describe the three components of the object ts (trend, seasonal, residual).
+```{r}
+motosale_ts %>% 
+  decompose() %>% 
+  autoplot()
+```
+Based on the results of the decomposition plot above, now We know that the type of time series we have is *additive*.  
+
+# **4. MODEL FITTING & EVALUATION**  
+  
+## **4.1.Cross Validation**  
+Before doing the time series analysis, we will doing data cross validation by splitting `motosale_ts` into data train and data test.
+```{r}
+# data train for 50 years
+(motosale_ts_train <- head(motosale_ts, 50*12))
+# data test for 2 years
+(motosale_ts_test <- tail(motosale_ts, 24))
+```
+  
+## **4.2.Model Fitting & Evaluation**  
+Since the data having the trend & seasonal. So, We will doing model fitting with `Holtwinters` automatically & manually.
+```{r}
+(HWmod_A <- HoltWinters(x = motosale_ts_train,
+                                          seasonal = "additive"))
+
+(HWmod_M <- HoltWinters(x = motosale_ts_train,
+                                         alpha = 0.01,
+                                         beta = 0.001,
+                                         gamma = 0.2,
+                                         seasonal = "additive"))
+```
+Then We will do prediction for the model We have create based on the data test.
+```{r}
+HWmod_A_fc <- forecast(object = HWmod_A, h = 24)
+
+HWmod_M_fc <- forecast(object = HWmod_M, h = 24)
+```
+Forecast interpretation.
+```{r}
+motosale_ts_train %>% 
+  autoplot() +
+  autolayer(object = HWmod_A_fc) +
+  autolayer(object = HWmod_M_fc)
+
+motosale_ts_test %>% 
+  autoplot() + 
+  autolayer(object = HWmod_A_fc) +
+  autolayer(object = HWmod_M_fc)
+```
+Model evaluation
+```{r}
+forecast::accuracy(HWmod_A_fc$mean, motosale_ts_test)
+
+forecast::accuracy(HWmod_M_fc$mean, motosale_ts_test)
+```
+
+## **4.3.Compare Model**  
+Before we decide the model that We will use, We will build another model that compatible to the data and compare which one is better. So, We build another model.
+Since the data having a trend & seasonal. So, we can not use the Exponential Smoothing model.
+We will try to build a model using `SARIMA`.  
+
+Data staionary check.
+```{r}
+motosale_ts_train %>% 
+  adf.test()
+```
+from `adf.test()` above we can see that the data already stationeer. So, We don't need to do differencing and We can directly build the model.
+```{r}
+(SARIMAmod <- auto.arima(y = motosale_ts_train))
+```
+Then We will do prediction for the model We have create based on the data test.
+```{r}
+SARIMAmod_fc <- forecast(object = SARIMAmod, h = 24)
+```
+Forecast interpretation.
+```{r}
+motosale_ts_train %>% 
+  autoplot() +
+  autolayer(object = motosale_ts_test, series = "data validation") +
+  autolayer(object = SARIMAmod_fc$mean, series = "forecast") +
+  autolayer(object = SARIMAmod$fitted, series = "Fitted value")
+```
+Model evaluation
+```{r}
+forecast::accuracy(SARIMAmod_fc$mean, motosale_ts_test)
+```
+  
+# **5. CONCLUSION**  
+  
+From the evaluation of the 3 model that We build, `SARIMA` model is the best result.  
+After We know the best model We will use, now we will do **Assumption Check** for the residual.
+  
+## **5.1. No-Autocorrelation Residual**
+```{r}
+Box.test(SARIMAmod$residuals, type = "Ljung-Box")
+```
+$H_0$: residual has no-autocorrelation
+$H_1$: residual has autocorrelation
+
+**p-value > 0.05 (alpha), no-autocorrelation**
+
+**Insight** : residual has no-autocorrelation  
+  
+## **5.2. Normality Residual**  
+We will check the normality residual with visualization.
+```{r}
+hist(SARIMAmod$residuals)
+```
+Based on the visualization, the residual is not normally distributed.
+Now, We will check using saphiro test.
+```{r}
+shapiro.test(SARIMAmod$residuals)
+```
+H0 : Residual data is normally distributed  
+H1 : Residual data is not normally distributed  
+  
+**Reject H0, if p-value < alpha (0.05)**  
+  
+**Insight** : Residual data is not normally distributed  
+  
+## **5.3. Summary**
+Based on the assumption check, there is no autocorrelation on our forecast residuals (p-value > 0.05). Still, our forecast’s residuals are not distributed normally, therefore it’s residuals may not be appeared around its mean as seen in the histogram. But, if we inspect the distribution of residuals through a line plot, it is actually resembles the error plot from our time series object decomposition.  
+  
+In a time series, such errors might emerge from various unpredictable events and is actually quite unavoidable. One strategy to overcome it is to analyze what kinds of unpredictable events that might occur and occurs frequently. This can be done by time series analysis using seasonality adjustment.
